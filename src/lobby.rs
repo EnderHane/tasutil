@@ -13,7 +13,7 @@ pub fn lobby_map<P: AsRef<Path>>(path: P)
     -> (BTreeMap<(u32, u32), (Option<u32>, String)>, BTreeMap<(u32, u32), (Option<u32>, String)>){
     lazy_static! {
         static ref FILE_NAME_PATTERN: Regex = Regex::new(r"^[[:alpha:]]+_([[:digit:]]+)\-([[:digit:]]+)\.tas$").unwrap();
-        static ref TIMESTAMP_PATTERN: Regex = Regex::new(r"[[:digit:].:]+\(([[:digit:]]+)\)$").unwrap();
+        static ref TIMESTAMP_PATTERN: Regex = Regex::new(r"[[:digit:].:]+\(([[:digit:]]+)\)").unwrap();
     }
     WalkDir::new(path).max_depth(1).into_iter()
         .filter_map(|e| e.ok())
