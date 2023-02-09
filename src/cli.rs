@@ -40,6 +40,8 @@ pub enum LobbyCommand {
         dir: Option<PathBuf>,
         #[arg(short, long)]
         num: Option<u32>,
+        #[arg(long)]
+        show_arc: bool,
     },
     #[command(alias("gi"))]
     GenerateInput {

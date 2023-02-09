@@ -53,7 +53,7 @@ fn _scan_breakpoint() {
 fn _lobby(command: LobbyCommand) {
     match command {
         LobbyCommand::Info { dir } => _info(dir),
-        LobbyCommand::Route { dir, num } => _route(dir, num),
+        LobbyCommand::Route { dir, num, show_arc } => _route(dir, num, show_arc),
         LobbyCommand::GenerateInput { string, csv, lobby_dir } => _generate_input(string, csv, lobby_dir)
     }
 }
@@ -94,7 +94,7 @@ fn _info(dir: Option<PathBuf>) {
 }
 
 
-fn _route(dir: Option<PathBuf>, num: Option<u32>) {
+fn _route(dir: Option<PathBuf>, num: Option<u32>, show_arc: bool) {
     let path = dir.unwrap_or(env::current_dir().unwrap());
     let (succ, fail) = lobby::lobby_map(&path);
     if fail.is_empty() {
@@ -107,8 +107,24 @@ fn _route(dir: Option<PathBuf>, num: Option<u32>) {
             println!("Found {path_count} paths in {path:?}");
             println!("Best {buffer_size} paths are");
             for (i, Reverse((len, p))) in results.iter().rev().enumerate() {
-                let path_string = p.iter().map(|i| i.to_string()).collect::<Vec<_>>().join("-");
-                println!("{})[{}] {}", i + 1, len, path_string);
+                let path_string = p.iter()
+                    .fold::<(String, Option<&u32>), _>((String::new(), None),
+                        |(mut acc, pre), vert| {
+                            if let Some(vert_pre) = pre {
+                                if show_arc {
+                                    if let Some(w) = lobby.get(&(*vert_pre, *vert)) {
+                                        acc.push_str("-<");
+                                        acc.push_str(w.to_string().as_str());
+                                        acc.push_str(">-");
+                                    }
+                                } else {
+                                    acc.push('-');
+                                }
+                            }
+                            acc.push_str(vert.to_string().as_str());
+                            (acc, Some(vert))
+                        }).0;
+                println!("{})\t[{}]\t{}", i + 1, len, path_string);
             }
         }
     } else {
