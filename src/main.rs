@@ -106,7 +106,7 @@ fn _route(dir: Option<PathBuf>, num: Option<u32>) {
             let (path_count, results) = lobby::route(&lobby, &first, &last, &buffer_size);
             println!("Found {path_count} paths in {path:?}");
             println!("Best {buffer_size} paths are");
-            for (i, Reverse((len, p))) in results.iter().enumerate() {
+            for (i, Reverse((len, p))) in results.iter().rev().enumerate() {
                 let path_string = p.iter().map(|i| i.to_string()).collect::<Vec<_>>().join("-");
                 println!("{})[{}] {}", i + 1, len, path_string);
             }

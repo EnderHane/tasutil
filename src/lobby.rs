@@ -47,7 +47,7 @@ pub fn route(
     src: &u32,
     dst: &u32,
     buffer_size: &u32
-) -> (u32, BinaryHeap<Reverse<(u32, Vec<u32>)>>) {
+) -> (u32, Vec<Reverse<(u32, Vec<u32>)>>) {
     let graph = lobby.iter()
         .flat_map(|((a, b), _)| [*a, *b])
         .collect::<BTreeSet<_>>().iter()
@@ -117,5 +117,5 @@ pub fn route(
         buffer_size
     );
 
-    (path_count, result_buffer)
+    (path_count, result_buffer.into_sorted_vec())
 }
