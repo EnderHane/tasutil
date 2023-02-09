@@ -2,7 +2,13 @@
 name = "tasutil"
 version = "0.1.0"
 edition = "2021"
+authors = ["Hane"]
+description = "Command line tool for Celeste TASing"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+clap = { version = "4.1.4", features = ["derive"] }
+lazy_static = "1.4.0"
+regex = "1.7.1"
+walkdir = "2.3.2"
