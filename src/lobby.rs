@@ -1,5 +1,4 @@
-use std::cmp::Reverse;
-use std::collections::{BinaryHeap, BTreeMap, BTreeSet};
+use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::fs;
 use std::ops::Not;
 use std::path::Path;
@@ -10,12 +9,12 @@ use walkdir::WalkDir;
 
 
 pub fn lobby_map<P: AsRef<Path>>(path: P)
-    -> (BTreeMap<(u32, u32), (Option<u32>, String)>, BTreeMap<(u32, u32), (Option<u32>, String)>){
+    -> (HashMap<(u32, u32), (u32, String)>, HashMap<(u32, u32), String>){
     lazy_static! {
         static ref FILE_NAME_PATTERN: Regex = Regex::new(r"^[[:alpha:]]+_([[:digit:]]+)\-([[:digit:]]+)\.tas$").unwrap();
         static ref TIMESTAMP_PATTERN: Regex = Regex::new(r"[[:digit:].:]+\(([[:digit:]]+)\)").unwrap();
     }
-    WalkDir::new(path).max_depth(1).into_iter()
+    let lobby = WalkDir::new(path).max_depth(1).into_iter()
         .filter_map(|e| e.ok())
         .filter_map(|e| {
             FILE_NAME_PATTERN.captures(e.file_name().to_string_lossy().to_string().as_str())
@@ -38,37 +37,44 @@ pub fn lobby_map<P: AsRef<Path>>(path: P)
                 file_path
             )
         ))
-        .partition::<BTreeMap<_, _>, _>(|(_, (w, _))| w.is_some())
+        .collect::<HashMap<_, _>>();
+    let succ = lobby.iter()
+        .filter_map(|(p, (w, s))| w.map(|some_w| (*p, (some_w, s.clone()))))
+        .collect();
+    let fail = lobby.iter()
+        .filter_map(|(p, (w, s))| w.is_none().then_some((*p, s.clone())))
+        .collect();
+    (succ, fail)
 }
 
 
 pub fn route(
-    lobby: &BTreeMap<(u32, u32), u32>,
+    lobby: &HashMap<(u32, u32), u32>,
     src: &u32,
     dst: &u32,
     buffer_size: &u32
-) -> (u32, Vec<Reverse<(u32, Vec<u32>)>>) {
+) -> (u32, Vec<(u32, Vec<u32>)>) {
     let graph = lobby.iter()
         .flat_map(|((a, b), _)| [*a, *b])
-        .collect::<BTreeSet<_>>().iter()
+        .collect::<HashSet<_>>().iter()
         .map(|i| (*i, lobby.iter()
             .filter(|((a, _), _)| a == i)
             .map(|((_, b), w)| (*b, *w))
-            .collect::<BTreeMap<_, _>>()
+            .collect::<HashMap<_, _>>()
         ))
-        .collect::<BTreeMap<_, _>>();
+        .collect::<HashMap<_, _>>();
 
     let mut path_count = 0;
-    let mut result_buffer: BinaryHeap<Reverse<(u32, Vec<u32>)>> = BinaryHeap::new();
+    let mut result_buffer: BinaryHeap<(u32, Vec<u32>)> = BinaryHeap::new();
 
     fn search(
-        graph: &BTreeMap<u32, BTreeMap<u32, u32>>,
+        graph: &HashMap<u32, HashMap<u32, u32>>,
         current_vertex: &u32,
         destination: &u32,
         path_stack: &mut Vec<u32>,
         current_length: &mut u32,
         path_count: &mut u32,
-        result_buffer: &mut BinaryHeap<Reverse<(u32, Vec<u32>)>>,
+        result_buffer: &mut BinaryHeap<(u32, Vec<u32>)>,
         buffer_size: &u32
     ) {
         if path_stack.len() >= graph.len() - 1 {
@@ -76,7 +82,7 @@ pub fn route(
                 if let Some(w) = adj.get(destination) {
                     path_stack.push(*destination);
                     *current_length += w;
-                    result_buffer.push(Reverse((*current_length, path_stack.clone())));
+                    result_buffer.push((*current_length, path_stack.clone()));
                     *path_count += 1;
                     if result_buffer.len() > *buffer_size as usize {
                         result_buffer.pop();

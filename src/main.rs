@@ -1,6 +1,5 @@
 use std::{env, fs};
-use std::cmp::Reverse;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{HashMap, HashSet};
 use std::ops::Not;
 use std::path::{Path, PathBuf};
 
@@ -65,17 +64,16 @@ fn _info(dir: Option<PathBuf>) {
     if succ.is_empty().not() {
         println!("Arc\tTime\tFile");
         succ.iter()
-            .map(|(ab, (w, p))| (*ab, (w.unwrap(), p)))
             .for_each(|((a, b), (w, p))| println!("{a}->{b}\t{w}\t{p}"))
     }
     println!();
     if succ.len() >= 2 {
-        let indices = succ.iter().flat_map(|((a, b), _)| [*a, *b]).collect::<BTreeSet<_>>();
-        let (first, last) = (*indices.first().unwrap(), *indices.last().unwrap());
+        let indices = succ.iter().flat_map(|((a, b), _)| [*a, *b]).collect::<HashSet<_>>();
+        let (first, last) = (*indices.iter().min().unwrap(), *indices.iter().max().unwrap());
         println!("Matrix in CSV:");
         for i in first..=last {
             for j in first..=last {
-                if let Some((Some(w), _)) = succ.get(&(i, j)) {
+                if let Some((w, _)) = succ.get(&(i, j)) {
                     print!("{w}")
                 }
                 if j != last {
@@ -88,7 +86,7 @@ fn _info(dir: Option<PathBuf>) {
     println!();
     if fail.is_empty().not() {
         println!("Warning, NO timestamp found in these files:");
-        fail.iter().for_each(|(_, (_, p))| println!("{p}"))
+        fail.iter().for_each(|(_, p)| println!("{p}"))
     }
     println!();
 }
@@ -99,14 +97,14 @@ fn _route(dir: Option<PathBuf>, num: Option<u32>, show_arc: bool) {
     let (succ, fail) = lobby::lobby_map(&path);
     if fail.is_empty() {
         if succ.is_empty().not() {
-            let indices = succ.iter().flat_map(|((a, b), _)| [*a, *b]).collect::<BTreeSet<_>>();
-            let (first, last) = (*indices.first().unwrap(), *indices.last().unwrap());
+            let indices = succ.iter().flat_map(|((a, b), _)| [*a, *b]).collect::<HashSet<_>>();
+            let (first, last) = (*indices.iter().min().unwrap(), *indices.iter().max().unwrap());
             let buffer_size = num.unwrap_or(1);
-            let lobby = succ.iter().map(|((a, b), (w, _))| ((*a, *b), w.unwrap())).collect();
+            let lobby = succ.iter().map(|((a, b), (w, _))| ((*a, *b), *w)).collect();
             let (path_count, results) = lobby::route(&lobby, &first, &last, &buffer_size);
             println!("Found {path_count} paths in {path:?}");
             println!("Best {buffer_size} paths are");
-            for (i, Reverse((len, p))) in results.iter().rev().enumerate() {
+            for (i, (len, p)) in results.iter().enumerate() {
                 let path_string = p.iter()
                     .fold::<(String, Option<&u32>), _>((String::new(), None),
                         |(mut acc, pre), vert| {
@@ -129,20 +127,26 @@ fn _route(dir: Option<PathBuf>, num: Option<u32>, show_arc: bool) {
         }
     } else {
         println!("Warning, NO timestamp found in these files, and the algorithm will NOT be run:");
-        fail.iter().for_each(|(_, (_, p))| println!("{p}"))
+        fail.iter().for_each(|(_, p)| println!("{p}"))
     }
 }
 
 fn _generate_input(string: String, csv: PathBuf, lobby_dir: PathBuf) {
     let (succ, fail) = lobby::lobby_map(lobby_dir);
-    let lobby = succ.into_iter().chain(fail.into_iter()).collect::<BTreeMap<_, _>>();
+    let lobby = succ.into_iter()
+        .map(|(ab, (w, p))| (ab, (Some(w), p)))
+        .chain(
+            fail.into_iter()
+                .map(|(ab, p)| (ab, (None, p)))
+        )
+        .collect::<HashMap<_, _>>();
     let csv_content = fs::read_to_string(&csv).unwrap_or_else(|_| panic!("Cannot read lobby CSV {}", csv.display()));
     let table = csv_content.lines()
         .filter_map(|l| {
             let pair = l.split(',').collect::<Vec<_>>();
             pair.len().ge(&2).then_some((pair[0].parse().unwrap(), pair[1]))
         })
-        .collect::<BTreeMap<u32, _>>();
+        .collect::<HashMap<u32, _>>();
     let arcs = string.split('-')
         .map(|s| s.parse::<u32>().unwrap())
         .fold((vec![], None), |(mut acc, pre), vert| {
