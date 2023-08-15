@@ -1,5 +1,5 @@
 use std::{env, fs};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashSet, BTreeSet, BTreeMap};
 use std::ops::Not;
 use std::path::{Path, PathBuf};
 
@@ -97,7 +97,7 @@ fn _route(dir: Option<PathBuf>, num: Option<u32>, show_arc: bool) {
     let (succ, fail) = lobby::lobby_map(&path);
     if fail.is_empty() {
         if succ.is_empty().not() {
-            let indices = succ.iter().flat_map(|((a, b), _)| [*a, *b]).collect::<HashSet<_>>();
+            let indices = succ.iter().flat_map(|((a, b), _)| [*a, *b]).collect::<BTreeSet<_>>();
             let (first, last) = (*indices.iter().min().unwrap(), *indices.iter().max().unwrap());
             let buffer_size = num.unwrap_or(1);
             let lobby = succ.iter().map(|((a, b), (w, _))| ((*a, *b), *w)).collect();
@@ -139,14 +139,14 @@ fn _generate_input(string: String, csv: PathBuf, lobby_dir: PathBuf) {
             fail.into_iter()
                 .map(|(ab, p)| (ab, (None, p)))
         )
-        .collect::<HashMap<_, _>>();
+        .collect::<BTreeMap<_, _>>();
     let csv_content = fs::read_to_string(&csv).unwrap_or_else(|_| panic!("Cannot read lobby CSV {}", csv.display()));
     let table = csv_content.lines()
         .filter_map(|l| {
             let pair = l.split(',').collect::<Vec<_>>();
             pair.len().ge(&2).then_some((pair[0].parse().unwrap(), pair[1]))
         })
-        .collect::<HashMap<u32, _>>();
+        .collect::<BTreeMap<u32, _>>();
     let arcs = string.split('-')
         .map(|s| s.parse::<u32>().unwrap())
         .fold((vec![], None), |(mut acc, pre), vert| {

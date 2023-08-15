@@ -1,4 +1,4 @@
-use std::collections::{BinaryHeap, HashMap, HashSet};
+use std::collections::{BinaryHeap, HashSet, BTreeMap};
 use std::fs;
 use std::ops::Not;
 use std::path::Path;
@@ -9,7 +9,7 @@ use walkdir::WalkDir;
 
 
 pub fn lobby_map<P: AsRef<Path>>(path: P)
-    -> (HashMap<(u32, u32), (u32, String)>, HashMap<(u32, u32), String>){
+    -> (BTreeMap<(u32, u32), (u32, String)>, BTreeMap<(u32, u32), String>){
     lazy_static! {
         static ref FILE_NAME_PATTERN: Regex = Regex::new(r"^[[:alpha:]]+_([[:digit:]]+)\-([[:digit:]]+)\.tas$").unwrap();
         static ref TIMESTAMP_PATTERN: Regex = Regex::new(r"[[:digit:].:]+\(([[:digit:]]+)\)").unwrap();
@@ -37,7 +37,7 @@ pub fn lobby_map<P: AsRef<Path>>(path: P)
                 file_path
             )
         ))
-        .collect::<HashMap<_, _>>();
+        .collect::<BTreeMap<_, _>>();
     let succ = lobby.iter()
         .filter_map(|(p, (w, s))| w.map(|some_w| (*p, (some_w, s.clone()))))
         .collect();
@@ -49,7 +49,7 @@ pub fn lobby_map<P: AsRef<Path>>(path: P)
 
 
 pub fn route(
-    lobby: &HashMap<(u32, u32), u32>,
+    lobby: &BTreeMap<(u32, u32), u32>,
     src: &u32,
     dst: &u32,
     buffer_size: &u32
@@ -60,15 +60,15 @@ pub fn route(
         .map(|i| (*i, lobby.iter()
             .filter(|((a, _), _)| a == i)
             .map(|((_, b), w)| (*b, *w))
-            .collect::<HashMap<_, _>>()
+            .collect::<BTreeMap<_, _>>()
         ))
-        .collect::<HashMap<_, _>>();
+        .collect::<BTreeMap<_, _>>();
 
     let mut path_count = 0;
     let mut result_buffer: BinaryHeap<(u32, Vec<u32>)> = BinaryHeap::new();
 
     fn search(
-        graph: &HashMap<u32, HashMap<u32, u32>>,
+        graph: &BTreeMap<u32, BTreeMap<u32, u32>>,
         current_vertex: &u32,
         destination: &u32,
         path_stack: &mut Vec<u32>,
