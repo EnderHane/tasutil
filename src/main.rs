@@ -101,7 +101,7 @@ fn _route(dir: Option<PathBuf>, num: Option<u32>, show_arc: bool) {
             let (first, last) = (*indices.iter().min().unwrap(), *indices.iter().max().unwrap());
             let buffer_size = num.unwrap_or(1);
             let lobby = succ.iter().map(|((a, b), (w, _))| ((*a, *b), *w)).collect();
-            let (path_count, results) = lobby::route(&lobby, &first, &last, &buffer_size);
+            let (path_count, results) = lobby::route(&lobby, first, last, buffer_size);
             println!("Found {path_count} paths in {path:?}");
             println!("Best {buffer_size} paths are");
             for (i, (len, p)) in results.iter().enumerate() {

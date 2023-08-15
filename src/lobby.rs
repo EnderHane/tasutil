@@ -1,4 +1,4 @@
-use std::collections::{BinaryHeap, HashSet, BTreeMap};
+use std::collections::{BinaryHeap, BTreeMap, BTreeSet};
 use std::fs;
 use std::ops::Not;
 use std::path::Path;
@@ -50,13 +50,13 @@ pub fn lobby_map<P: AsRef<Path>>(path: P)
 
 pub fn route(
     lobby: &BTreeMap<(u32, u32), u32>,
-    src: &u32,
-    dst: &u32,
-    buffer_size: &u32
+    src: u32,
+    dst: u32,
+    buffer_size: u32,
 ) -> (u32, Vec<(u32, Vec<u32>)>) {
     let graph = lobby.iter()
         .flat_map(|((a, b), _)| [*a, *b])
-        .collect::<HashSet<_>>().iter()
+        .collect::<BTreeSet<_>>().iter()
         .map(|i| (*i, lobby.iter()
             .filter(|((a, _), _)| a == i)
             .map(|((_, b), w)| (*b, *w))
@@ -69,32 +69,32 @@ pub fn route(
 
     fn search(
         graph: &BTreeMap<u32, BTreeMap<u32, u32>>,
-        current_vertex: &u32,
-        destination: &u32,
+        current_vertex: u32,
+        destination: u32,
         path_stack: &mut Vec<u32>,
         current_length: &mut u32,
         path_count: &mut u32,
         result_buffer: &mut BinaryHeap<(u32, Vec<u32>)>,
-        buffer_size: &u32
+        buffer_size: u32
     ) {
         if path_stack.len() >= graph.len() - 1 {
-            if let Some(adj) = graph.get(current_vertex) {
-                if let Some(w) = adj.get(destination) {
-                    path_stack.push(*destination);
+            if let Some(adj) = graph.get(&current_vertex) {
+                if let Some(w) = adj.get(&destination) {
+                    path_stack.push(destination);
                     *current_length += w;
                     result_buffer.push((*current_length, path_stack.clone()));
                     *path_count += 1;
-                    if result_buffer.len() > *buffer_size as usize {
+                    if result_buffer.len() > buffer_size as usize {
                         result_buffer.pop();
                     }
                     *current_length -= w;
                     path_stack.pop();
                 }
             }
-        } else if let Some(adj) = graph.get(current_vertex) {
-            for (next, w) in adj {
-                if next != destination && path_stack.contains(next).not() {
-                    path_stack.push(*next);
+        } else if let Some(adj) = graph.get(&current_vertex) {
+            for (&next, w) in adj {
+                if next != destination && path_stack.contains(&next).not() {
+                    path_stack.push(next);
                     *current_length += w;
                     search(
                         graph,
@@ -116,7 +116,7 @@ pub fn route(
         &graph,
         src,
         dst,
-        &mut vec![*src],
+        &mut vec![src],
         &mut 0,
         &mut path_count,
         &mut result_buffer,
