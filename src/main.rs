@@ -118,7 +118,20 @@ fn _route(dir: Option<PathBuf>, num: Option<u32>, show_arc: bool) {
                 *indices.iter().max().unwrap(),
             );
             let buffer_size = num.unwrap_or(1);
-            let lobby = succ.iter().map(|((a, b), (w, _))| ((*a, *b), *w)).collect();
+            let mut lobby = succ
+                .iter()
+                .map(|(&(a, b), &(w, _))| ((a, b), w))
+                .collect::<BTreeMap<_, _>>();
+            let restart_terminal = lobby.remove(&(first, last));
+            if let Some(rt) = restart_terminal {
+                let keys = lobby.keys().map(|&p| p).collect::<BTreeSet<_>>();
+                lobby.extend(
+                    indices
+                        .iter()
+                        .filter(|&&i| i != first && i != last && !keys.contains(&(i, last)))
+                        .map(|&i| ((i, last), rt+69)),
+                )
+            }
             let (path_count, results) = lobby::route(&lobby, first, last, buffer_size);
             println!("Found {path_count} paths in {path:?}");
             println!("Best {buffer_size} paths are");
