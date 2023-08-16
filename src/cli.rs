@@ -1,5 +1,5 @@
-use std::path::PathBuf;
 use clap::{Parser, Subcommand};
+use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -18,7 +18,7 @@ pub enum Command {
     Lobby {
         #[command(subcommand)]
         command: LobbyCommand,
-    }
+    },
 }
 
 #[derive(Subcommand)]
@@ -32,7 +32,7 @@ pub enum LobbyCommand {
     #[command(alias("i"))]
     Info {
         #[arg(short, long)]
-        dir: Option<PathBuf>
+        dir: Option<PathBuf>,
     },
     #[command(alias("r"))]
     Route {
@@ -48,5 +48,5 @@ pub enum LobbyCommand {
         string: String,
         csv: PathBuf,
         lobby_dir: PathBuf,
-    }
+    },
 }

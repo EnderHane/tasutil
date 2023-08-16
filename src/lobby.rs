@@ -1,4 +1,4 @@
-use std::collections::{BinaryHeap, BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, BinaryHeap};
 use std::fs;
 use std::ops::Not;
 use std::path::Path;
@@ -7,46 +7,63 @@ use lazy_static::lazy_static;
 use regex::Regex;
 use walkdir::WalkDir;
 
-
-pub fn lobby_map<P: AsRef<Path>>(path: P)
-    -> (BTreeMap<(u32, u32), (u32, String)>, BTreeMap<(u32, u32), String>){
+pub fn lobby_map<P: AsRef<Path>>(
+    path: P,
+) -> (
+    BTreeMap<(u32, u32), (u32, String)>,
+    BTreeMap<(u32, u32), String>,
+) {
     lazy_static! {
-        static ref FILE_NAME_PATTERN: Regex = Regex::new(r"^[[:alpha:]]+_([[:digit:]]+)\-([[:digit:]]+)\.tas$").unwrap();
-        static ref TIMESTAMP_PATTERN: Regex = Regex::new(r"[[:digit:].:]+\(([[:digit:]]+)\)").unwrap();
+        static ref FILE_NAME_PATTERN: Regex =
+            Regex::new(r"^[[:alpha:]]+_([[:digit:]]+)\-([[:digit:]]+)\.tas$").unwrap();
+        static ref TIMESTAMP_PATTERN: Regex =
+            Regex::new(r"[[:digit:].:]+\(([[:digit:]]+)\)").unwrap();
     }
-    let lobby = WalkDir::new(path).max_depth(1).into_iter()
+    let lobby = WalkDir::new(path)
+        .max_depth(1)
+        .into_iter()
         .filter_map(|e| e.ok())
         .filter_map(|e| {
-            FILE_NAME_PATTERN.captures(e.file_name().to_string_lossy().to_string().as_str())
-                .map(|cap| (
+            FILE_NAME_PATTERN
+                .captures(e.file_name().to_string_lossy().to_string().as_str())
+                .map(|cap| {
                     (
-                        cap.get(1).unwrap().as_str().parse().unwrap(),
-                        cap.get(2).unwrap().as_str().parse().unwrap()
-                    ),
-                    e.path().to_string_lossy().to_string())
-                )
+                        (
+                            cap.get(1).unwrap().as_str().parse().unwrap(),
+                            cap.get(2).unwrap().as_str().parse().unwrap(),
+                        ),
+                        e.path().to_string_lossy().to_string(),
+                    )
+                })
         })
-        .map(|(edge, file_path)| (
-            edge,
+        .map(|(edge, file_path)| {
             (
-                fs::read_to_string(file_path.as_str()).ok().and_then(|s|
-                    s.lines().find_map(|line|
-                        TIMESTAMP_PATTERN.captures(line)
-                            .map(|cap| cap.get(1).unwrap().as_str().to_string())
-                    ).and_then(|dec| dec.parse().ok())),
-                file_path
+                edge,
+                (
+                    fs::read_to_string(file_path.as_str()).ok().and_then(|s| {
+                        s.lines()
+                            .find_map(|line| {
+                                TIMESTAMP_PATTERN
+                                    .captures(line)
+                                    .map(|cap| cap.get(1).unwrap().as_str().to_string())
+                            })
+                            .and_then(|dec| dec.parse().ok())
+                    }),
+                    file_path,
+                ),
             )
-        ))
+        })
         .collect::<BTreeMap<_, _>>();
-    let succ = lobby.iter()
+    let succ = lobby
+        .iter()
         .filter_map(|(p, (w, s))| w.map(|some_w| (*p, (some_w, s.clone()))))
         .collect();
-    let fail = lobby.iter()
+    let fail = lobby
+        .iter()
         .filter_map(|(p, (w, s))| w.is_none().then_some((*p, s.clone())))
         .collect();
     (succ, fail)
 }
-
 
 pub fn route(
     lobby: &BTreeMap<(u32, u32), u32>,
@@ -55,16 +72,28 @@ pub fn route(
     buffer_size: u32,
 ) -> (u32, Vec<(u32, Vec<u32>)>) {
     let restart_terminal = lobby.get(&(src, dst));
-    let graph = lobby.iter()
+    let graph = lobby
+        .iter()
         .flat_map(|((a, b), _)| [a, b])
-        .collect::<BTreeSet<_>>().into_iter()
-        .map(|&i| (i, lobby.iter()
-            .filter(|(&(a, _), _)| a == i)
-            .map(|(&(_, b), &w)| (b, w))
-            // 自动添加重新开始章节的路线
-            .chain(lobby.get(&(i, dst)).map(|&origin| (dst, origin)).or(restart_terminal.map(|&rt| (dst, rt+69))))
-            .collect::<BTreeMap<_, _>>()
-        ))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .map(|&i| {
+            (
+                i,
+                lobby
+                    .iter()
+                    .filter(|(&(a, _), _)| a == i)
+                    .map(|(&(_, b), &w)| (b, w))
+                    // 自动添加重新开始章节的路线
+                    .chain(
+                        lobby
+                            .get(&(i, dst))
+                            .map(|&origin| (dst, origin))
+                            .or(restart_terminal.map(|&rt| (dst, rt + 69))),
+                    )
+                    .collect::<BTreeMap<_, _>>(),
+            )
+        })
         .collect::<BTreeMap<_, _>>();
 
     let mut path_count = 0;
@@ -78,7 +107,7 @@ pub fn route(
         current_length: &mut u32,
         path_count: &mut u32,
         result_buffer: &mut BinaryHeap<(u32, Vec<u32>)>,
-        buffer_size: u32
+        buffer_size: u32,
     ) {
         if path_stack.len() >= graph.len() - 1 {
             if let Some(adj) = graph.get(&current_vertex) {
@@ -107,7 +136,7 @@ pub fn route(
                         current_length,
                         path_count,
                         result_buffer,
-                        buffer_size
+                        buffer_size,
                     );
                     *current_length -= w;
                     path_stack.pop();
@@ -123,7 +152,7 @@ pub fn route(
         &mut 0,
         &mut path_count,
         &mut result_buffer,
-        buffer_size
+        buffer_size,
     );
 
     (path_count, result_buffer.into_sorted_vec())
