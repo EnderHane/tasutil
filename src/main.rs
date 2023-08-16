@@ -122,14 +122,14 @@ fn _route(dir: Option<PathBuf>, num: Option<u32>, show_arc: bool) {
                 .iter()
                 .map(|(&(a, b), &(w, _))| ((a, b), w))
                 .collect::<BTreeMap<_, _>>();
-            let restart_terminal = lobby.remove(&(first, last));
-            if let Some(rt) = restart_terminal {
+            // 自动补全重新开始章节的路径
+            if let Some(restart_terminal) = lobby.remove(&(first, last)) {
                 let keys = lobby.keys().map(|&p| p).collect::<BTreeSet<_>>();
                 lobby.extend(
                     indices
                         .iter()
                         .filter(|&&i| i != first && i != last && !keys.contains(&(i, last)))
-                        .map(|&i| ((i, last), rt+69)),
+                        .map(|&i| ((i, last), restart_terminal+69)),
                 )
             }
             let (path_count, results) = lobby::route(&lobby, first, last, buffer_size);
