@@ -54,12 +54,15 @@ pub fn route(
     dst: u32,
     buffer_size: u32,
 ) -> (u32, Vec<(u32, Vec<u32>)>) {
+    let restart_terminal = lobby.get(&(src, dst));
     let graph = lobby.iter()
-        .flat_map(|((a, b), _)| [*a, *b])
-        .collect::<BTreeSet<_>>().iter()
-        .map(|i| (*i, lobby.iter()
-            .filter(|((a, _), _)| a == i)
-            .map(|((_, b), w)| (*b, *w))
+        .flat_map(|((a, b), _)| [a, b])
+        .collect::<BTreeSet<_>>().into_iter()
+        .map(|&i| (i, lobby.iter()
+            .filter(|(&(a, _), _)| a == i)
+            .map(|(&(_, b), &w)| (b, w))
+            // 自动添加重新开始章节的路线
+            .chain(lobby.get(&(i, dst)).map(|&origin| (dst, origin)).or(restart_terminal.map(|&rt| (dst, rt+69))))
             .collect::<BTreeMap<_, _>>()
         ))
         .collect::<BTreeMap<_, _>>();
