@@ -47,6 +47,6 @@ pub enum LobbyCommand {
     GenerateInput {
         string: String,
         csv: PathBuf,
-        lobby_dir: PathBuf,
+        template: PathBuf,
     },
 }

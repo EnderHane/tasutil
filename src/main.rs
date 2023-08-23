@@ -60,8 +60,8 @@ fn _lobby(command: LobbyCommand) {
         LobbyCommand::GenerateInput {
             string,
             csv,
-            lobby_dir,
-        } => _generate_input(string, csv, lobby_dir),
+            template,
+        } => _generate_input(string, csv, template),
     }
 }
 
@@ -166,42 +166,33 @@ fn _route(dir: Option<PathBuf>, num: Option<u32>, show_arc: bool) {
     }
 }
 
-fn _generate_input(string: String, csv: PathBuf, lobby_dir: PathBuf) {
-    let (succ, fail) = lobby::lobby_map(lobby_dir);
-    let lobby = succ
-        .into_iter()
-        .map(|(ab, (w, p))| (ab, (Some(w), p)))
-        .chain(fail.into_iter().map(|(ab, p)| (ab, (None, p))))
-        .collect::<BTreeMap<_, _>>();
-    let csv_content = fs::read_to_string(&csv)
-        .unwrap_or_else(|_| panic!("Cannot read lobby CSV {}", csv.display()));
+fn _generate_input(string: String, csv: PathBuf, template: PathBuf) {
+    let csv_content =
+        fs::read_to_string(&csv).expect(&format!("Cannot read lobby CSV {}", csv.display()));
+    let template_content =
+        fs::read_to_string(&template).expect(&format!("Cannot read template {}", csv.display()));
     let table = csv_content
         .lines()
         .filter_map(|l| {
             let pair = l.split(',').collect::<Vec<_>>();
-            pair.len()
-                .ge(&2)
-                .then_some((pair[0].parse().unwrap(), pair[1]))
-        })
-        .collect::<BTreeMap<u32, _>>();
-    let arcs = string
-        .split('-')
-        .map(|s| s.parse::<u32>().unwrap())
-        .fold((vec![], None), |(mut acc, pre), vert| match pre {
-            Some(vert_pre) => {
-                acc.push((vert_pre, vert));
-                (acc, Some(vert))
+            if pair.len() >= 2 {
+                Some((pair[0].trim(), pair[1].trim()))
+            } else {
+                None
             }
-            None => (acc, Some(vert)),
         })
-        .0;
-    arcs.iter().for_each(|(a, b)| {
-        if let Some((_, f_path)) = lobby.get(&(*a, *b)) {
-            println!("Read,{f_path},Start")
-        }
-        if let Some(f_path) = table.get(b) {
-            println!("Read,{f_path},Start");
-            println!("Read,MapEnd.tas")
-        }
-    });
+        .collect::<BTreeMap<_, _>>();
+    let route = string.split('-').collect::<Vec<_>>();
+    route
+        .iter()
+        .take(route.len() - 1)
+        .zip(route.iter().skip(1))
+        .for_each(|(&src, &dst)| {
+            let s = template_content.replace("%src%", src).replace("%dst%", dst);
+            if let Some(&map) = table.get(dst) {
+                println!("{}", s.replace("%map%", map));
+            } else {
+                println!("{}", s);
+            }
+        });
 }
