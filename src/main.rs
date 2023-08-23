@@ -129,7 +129,7 @@ fn _route(dir: Option<PathBuf>, num: Option<u32>, show_arc: bool) {
                     indices
                         .iter()
                         .filter(|&&i| i != first && i != last && !keys.contains(&(i, last)))
-                        .map(|&i| ((i, last), restart_terminal+69)),
+                        .map(|&i| ((i, last), restart_terminal + 69)),
                 )
             }
             let (path_count, results) = lobby::route(&lobby, first, last, buffer_size);
