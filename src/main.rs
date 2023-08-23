@@ -173,26 +173,36 @@ fn _generate_input(string: String, csv: PathBuf, template: PathBuf) {
         fs::read_to_string(&template).expect(&format!("Cannot read template {}", csv.display()));
     let table = csv_content
         .lines()
-        .filter_map(|l| {
-            let pair = l.split(',').collect::<Vec<_>>();
-            if pair.len() >= 2 {
-                Some((pair[0].trim(), pair[1].trim()))
-            } else {
-                None
-            }
-        })
+        .filter_map(|l| l.split(',').nth(0).map(|key| (key, l.split(',').skip(1))))
         .collect::<BTreeMap<_, _>>();
-    let route = string.split('-').collect::<Vec<_>>();
-    route
-        .iter()
-        .take(route.len() - 1)
-        .zip(route.iter().skip(1))
-        .for_each(|(&src, &dst)| {
-            let s = template_content.replace("%src%", src).replace("%dst%", dst);
-            if let Some(&map) = table.get(dst) {
-                println!("{}", s.replace("%map%", map));
-            } else {
-                println!("{}", s);
-            }
+    string
+        .split('-')
+        .scan(None, |i, next| {
+            i.replace(next).map(|last| (last, next)).or(Some(("", "")))
+        })
+        .filter(|&(a, b)| !a.is_empty() && !b.is_empty())
+        .for_each(|(src, dst)| {
+            let mut s = template_content.clone();
+            s = s.replace("%src%", src);
+            s = s.replace("%dst%", dst);
+            (1..10)
+                .map(|i| (i, format!("%src:{}%", i)))
+                .for_each(|(i, pat)| {
+                    table.get(src).iter().for_each(|&t| {
+                        t.clone().nth(i - 1).iter().for_each(|&content| {
+                            s = s.replace(&pat, content);
+                        });
+                    });
+                });
+            (1..10)
+                .map(|i| (i, format!("%dst:{}%", i)))
+                .for_each(|(i, pat)| {
+                    table.get(dst).iter().for_each(|&t| {
+                        t.clone().nth(i - 1).iter().for_each(|&content| {
+                            s = s.replace(&pat, content);
+                        });
+                    });
+                });
+            println!("{s}")
         });
 }
