@@ -68,21 +68,31 @@ fn _lobby(command: LobbyCommand) {
 fn _info(dir: Option<PathBuf>) {
     let path = dir.unwrap_or(env::current_dir().unwrap());
     let (succ, fail) = lobby::lobby_map(path);
-    if succ.is_empty().not() {
+    let indices = succ
+        .iter()
+        .flat_map(|(&(a, b), _)| [a, b])
+        .collect::<HashSet<_>>();
+    let (&first, &last) = (indices.iter().min().unwrap(), indices.iter().max().unwrap());
+    if !succ.is_empty() {
+        let mut to_print = succ.clone();
+        for (&(_, b), &(w, _)) in succ.iter().filter(|&(&(a, _), _)| a == first) {
+            for &i in indices
+                .iter()
+                .filter(|&&i| i != b && i != last && !succ.contains_key(&(i, b)))
+            {
+                to_print.insert(
+                    (i, b),
+                    (w + 69, "{Auto Generated Restarting Route}".to_owned()),
+                );
+            }
+        }
         println!("Arc\tTime\tFile");
-        succ.iter()
-            .for_each(|((a, b), (w, p))| println!("{a}->{b}\t{w}\t{p}"))
+        for ((a, b), (w, p)) in &to_print {
+            println!("{a}->{b}\t{w}\t{p}")
+        }
     }
     println!();
     if succ.len() >= 2 {
-        let indices = succ
-            .iter()
-            .flat_map(|((a, b), _)| [*a, *b])
-            .collect::<HashSet<_>>();
-        let (first, last) = (
-            *indices.iter().min().unwrap(),
-            *indices.iter().max().unwrap(),
-        );
         println!("Matrix in CSV:");
         for i in first..=last {
             for j in first..=last {
@@ -111,26 +121,23 @@ fn _route(dir: Option<PathBuf>, num: Option<u32>, show_arc: bool) {
         if succ.is_empty().not() {
             let indices = succ
                 .iter()
-                .flat_map(|((a, b), _)| [*a, *b])
+                .flat_map(|(&(a, b), _)| [a, b])
                 .collect::<BTreeSet<_>>();
-            let (first, last) = (
-                *indices.iter().min().unwrap(),
-                *indices.iter().max().unwrap(),
-            );
+            let (&first, &last) = (indices.iter().min().unwrap(), indices.iter().max().unwrap());
             let buffer_size = num.unwrap_or(1);
             let mut lobby = succ
                 .iter()
                 .map(|(&(a, b), &(w, _))| ((a, b), w))
                 .collect::<BTreeMap<_, _>>();
             // 自动补全重新开始章节的路径
-            if let Some(restart_terminal) = lobby.remove(&(first, last)) {
-                let keys = lobby.keys().map(|&p| p).collect::<BTreeSet<_>>();
-                lobby.extend(
-                    indices
-                        .iter()
-                        .filter(|&&i| i != first && i != last && !keys.contains(&(i, last)))
-                        .map(|&i| ((i, last), restart_terminal + 69)),
-                )
+            let lobby_orig = lobby.clone();
+            for (&(_, b), &w) in lobby_orig.iter().filter(|&(&(a, _), _)| a == first) {
+                for &i in indices
+                    .iter()
+                    .filter(|&&i| i != b && i != last && !lobby_orig.contains_key(&(i, b)))
+                {
+                    lobby.insert((i, b), w + 69);
+                }
             }
             let (path_count, results) = lobby::route(&lobby, first, last, buffer_size);
             println!("Found {path_count} paths in {path:?}");
@@ -175,34 +182,34 @@ fn _generate_input(string: String, csv: PathBuf, template: PathBuf) {
         .lines()
         .filter_map(|l| l.split(',').nth(0).map(|key| (key, l.split(',').skip(1))))
         .collect::<BTreeMap<_, _>>();
-    string
+    for (src, dst) in string
         .split('-')
         .scan(None, |i, next| {
             i.replace(next).map(|last| (last, next)).or(Some(("", "")))
         })
         .filter(|&(a, b)| !a.is_empty() && !b.is_empty())
-        .for_each(|(src, dst)| {
-            let mut s = template_content.clone();
-            s = s.replace("%src%", src);
-            s = s.replace("%dst%", dst);
-            (1..10)
-                .map(|i| (i, format!("%src:{}%", i)))
-                .for_each(|(i, pat)| {
-                    table.get(src).iter().for_each(|&t| {
-                        t.clone().nth(i - 1).iter().for_each(|&content| {
-                            s = s.replace(&pat, content);
-                        });
+    {
+        let mut s = template_content.clone();
+        s = s.replace("%src%", src);
+        s = s.replace("%dst%", dst);
+        (1..10)
+            .map(|i| (i, format!("%src:{}%", i)))
+            .for_each(|(i, pat)| {
+                table.get(src).iter().for_each(|&t| {
+                    t.clone().nth(i - 1).iter().for_each(|&content| {
+                        s = s.replace(&pat, content);
                     });
                 });
-            (1..10)
-                .map(|i| (i, format!("%dst:{}%", i)))
-                .for_each(|(i, pat)| {
-                    table.get(dst).iter().for_each(|&t| {
-                        t.clone().nth(i - 1).iter().for_each(|&content| {
-                            s = s.replace(&pat, content);
-                        });
+            });
+        (1..10)
+            .map(|i| (i, format!("%dst:{}%", i)))
+            .for_each(|(i, pat)| {
+                table.get(dst).iter().for_each(|&t| {
+                    t.clone().nth(i - 1).iter().for_each(|&content| {
+                        s = s.replace(&pat, content);
                     });
                 });
-            println!("{s}")
-        });
+            });
+        println!("{s}")
+    }
 }
