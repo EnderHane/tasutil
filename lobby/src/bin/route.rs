@@ -534,15 +534,18 @@ fn main() {
 
     let collect_count = cli.collect.unwrap_or(1);
     let mut res_buf: BinaryHeap<(usize, Vec<&str>)> = BinaryHeap::new();
+    let mut rt_count = 0;
 
     for e in search_it(&verts, &warps, min, max) {
+        rt_count += 1;
         res_buf.push(e);
         while res_buf.len() > collect_count {
             res_buf.pop();
         }
     }
 
-    for (i, (dis, pth)) in res_buf.into_sorted_vec().into_iter().enumerate() {
-        println!("({}) [{}] {}", i + 1, dis, pth.join("-"));
+    println!("Found {rt_count} routes.");
+    for (i, (dis, rt)) in res_buf.into_sorted_vec().into_iter().enumerate() {
+        println!("({}) [{}] {}", i + 1, dis, rt.join("-"));
     }
 }
