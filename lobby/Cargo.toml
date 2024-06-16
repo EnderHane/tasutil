@@ -1,0 +1,25 @@
+[package]
+name = "ctas-lb"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+cgmath = "0.18.0"
+clap = { version = "4.5.7", features = ["derive"] }
+counter = "0.5.7"
+crossbeam-channel = "0.5.13"
+itertools = "0.13.0"
+ordered-float = "4.2.0"
+rayon = "1.10.0"
+serde_json = "1.0.117"
+tinyvec = { version = "1.6.0", features = ["std"] }
+vec_map = "0.8.2"
+walkdir = "2.5.0"
+
+[[bin]]
+name = "ctas-lbi"
+path = "src/bin/read.rs"
+
+[[bin]]
+name = "ctas-rt"
+path = "src/bin/route.rs"
