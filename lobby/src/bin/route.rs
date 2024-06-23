@@ -1,9 +1,6 @@
 use std::{
-    borrow::Borrow,
     collections::{BTreeMap, BinaryHeap},
     io,
-    marker::PhantomData,
-    sync::Arc,
 };
 
 use clap::Parser;
@@ -320,22 +317,11 @@ impl Searcher {
 #[derive(Debug)]
 struct SearcherBuilder<'a, 's: 'a> {
     splited: &'a VertexWarpSplit<'s>,
-    thread_num: Option<usize>,
 }
 
 impl<'a, 's: 'a> SearcherBuilder<'a, 's> {
     fn new(splited: &'a VertexWarpSplit<'s>) -> Self {
-        Self {
-            splited,
-            thread_num: Default::default(),
-        }
-    }
-
-    fn thread_num(self, n: usize) -> Self {
-        Self {
-            thread_num: Some(n),
-            ..self
-        }
+        Self { splited }
     }
 
     fn build(self) -> (PlaceName<'s>, Searcher) {
@@ -403,7 +389,6 @@ impl<'a, 's: 'a> SearcherBuilder<'a, 's> {
         let s = Searcher {
             vertexes,
             warps,
-            //_phantom: PhantomData,
         };
 
         (place_name, s)
@@ -488,10 +473,6 @@ impl<'a> PlaceName<'a> {
 }
 
 impl PlaceName<'_> {
-    // fn start(&self) -> &str {
-    //     self.inters[Searcher::START_I]
-    // }
-
     fn name(&self, place: Place) -> &str {
         match place {
             Place::Vertex(v) => self.inters.get(v).unwrap_or(&self.end),
@@ -505,11 +486,11 @@ fn main() {
     let max_collect = cli
         .collect
         .inspect(|&v| {
-            if v > 1000 {
-                eprintln!("Warning: Collecting amount will be clamped to 1000")
+            if v > 1000 || v < 1 {
+                eprintln!("Warning: Collecting amount will be clamped to [1, 1000]")
             }
         })
-        .unwrap_or(3)
+        .unwrap_or(5)
         .clamp(1, 1000);
 
     let mut buf = String::new();
