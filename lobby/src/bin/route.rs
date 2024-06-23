@@ -298,7 +298,7 @@ impl Searcher {
                             }
                             let unexpl = unexpl - 1;
                             let excur = excur + d;
-                            any_searched = true;
+                            // any_searched = true;
                             self.search_place(dst, unexpl, excur, st, collector);
                             st.route.pop();
                             for &aw in act.iter() {
@@ -505,12 +505,12 @@ fn main() {
     let max_collect = cli
         .collect
         .inspect(|&v| {
-            if v > 512 {
-                eprintln!("Warning: Collecting amount will be clamped to 512")
+            if v > 1000 {
+                eprintln!("Warning: Collecting amount will be clamped to 1000")
             }
         })
         .unwrap_or(3)
-        .clamp(1, 512);
+        .clamp(1, 1000);
 
     let mut buf = String::new();
     let mut graph: Option<Graph> = None;

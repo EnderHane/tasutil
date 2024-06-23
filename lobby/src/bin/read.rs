@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::BTreeMap,
     env, fs,
     path::PathBuf,
     str::FromStr,
@@ -55,7 +55,7 @@ fn main() {
             (src, coord)
         })
         .collect();
-    let graph: HashMap<_, HashMap<_, _>> = edges
+    let graph: BTreeMap<_, BTreeMap<_, _>> = edges
         .iter()
         .map(|((src, dst), content)| {
             let time: usize = content
@@ -87,6 +87,8 @@ fn main() {
             (src.as_str(), (dst.as_str(), (time, activated_warps)))
         })
         .into_grouping_map()
+        .collect()
+        .into_iter()
         .collect();
 
     let s = serde_json::to_string(&graph).unwrap();
