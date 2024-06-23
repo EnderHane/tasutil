@@ -1,18 +1,19 @@
 use std::{
+    borrow::Borrow,
     collections::{BTreeMap, BinaryHeap},
-    io::{self, Read},
-    iter,
-    ops::Deref,
-    str::FromStr,
+    io,
+    marker::PhantomData,
+    sync::Arc,
 };
 
 use clap::Parser;
-use crossbeam_channel::Sender;
 use itertools::Itertools;
 
 type EdgeSet<'a> = BTreeMap<&'a str, (usize, Vec<&'a str>)>;
 type Graph<'a> = BTreeMap<&'a str, EdgeSet<'a>>;
-type WarpingGraph<'a> = BTreeMap<&'a str, (EdgeSet<'a>, EdgeSet<'a>)>;
+type BiGraph<'a> = BTreeMap<&'a str, (EdgeSet<'a>, EdgeSet<'a>)>;
+
+type Edge = (usize, usize, Box<[usize]>);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Place {
@@ -20,532 +21,541 @@ enum Place {
     Warp(usize),
 }
 
-#[derive(Parser)]
-#[command(version)]
-struct Cli {
-    collect: Option<usize>,
+type SearchResultEntry = (usize, Vec<Place>);
+
+#[derive(Clone, Default)]
+struct SearchState {
+    route: Vec<Place>,
+    active_warps: Vec<usize>,
 }
 
-fn search_it<'a>(
-    verts: &'a WarpingGraph,
-    warps: &'a Graph,
-    start: &str,
-    end: &'a str,
-) -> impl Iterator<Item = (usize, Vec<&'a str>)> {
-    let verts_name_arr = verts.keys().map(|k| *k).collect::<Vec<_>>();
-    let warps_name_arr = warps.keys().map(|k| *k).collect::<Vec<_>>();
+impl SearchState {
+    fn new(warp_num: usize) -> Self {
+        Self {
+            route: Vec::new(),
+            active_warps: vec![0; warp_num],
+        }
+    }
+}
 
-    // collect graph into Vec, which can be treat as Map<usize, T>
-    let verts_arr = verts_name_arr
-        .iter()
-        .map(|s| {
-            let (to_v, to_w) = &verts[s];
-            let to_v_arr = to_v
-                .into_iter()
-                .map(|(dst, &(d, ref act))| {
-                    let dst_i = verts_name_arr
-                        .iter()
-                        .position(|s| s == dst)
-                        .unwrap_or(verts_name_arr.len());
-                    let act_arr = act
-                        .into_iter()
-                        .map(|s| warps_name_arr.iter().position(|ss| ss == s).unwrap())
-                        .collect::<Vec<_>>()
-                        .leak() as &[_];
-                    (dst_i, d, act_arr)
-                })
-                .collect::<Vec<_>>()
-                .leak() as &[_];
-            let to_w_arr = to_w
-                .into_iter()
-                .map(|(dstw, &(d, ref act))| {
-                    let dstw_i = warps_name_arr.iter().position(|s| s == dstw).unwrap();
-                    let act_arr = act
-                        .into_iter()
-                        .map(|s| warps_name_arr.iter().position(|ss| ss == s).unwrap())
-                        .collect::<Vec<_>>()
-                        .leak() as &[_];
-                    (dstw_i, d, act_arr)
-                })
-                .collect::<Vec<_>>()
-                .leak() as &[_];
-            (to_v_arr, to_w_arr)
-        })
-        .collect::<Vec<_>>()
-        .leak() as &[_];
-    let warps_arr = warps_name_arr
-        .iter()
-        .map(|s| {
-            (&warps[s])
-                .into_iter()
-                .map(|(dst, &(d, ref act))| {
-                    let dst_i = verts_name_arr
-                        .iter()
-                        .position(|s| s == dst)
-                        .unwrap_or(verts_name_arr.len());
-                    let act_arr = act
-                        .into_iter()
-                        .map(|s| warps_name_arr.iter().position(|ss| ss == s).unwrap())
-                        .collect::<Vec<_>>()
-                        .leak() as &[_];
-                    (dst_i, d, act_arr)
-                })
-                .collect::<Vec<_>>()
-                .leak() as &[_]
-        })
-        .collect::<Vec<_>>()
-        .leak() as &[_];
+#[derive(Debug)]
+struct Searcher {
+    vertexes: Box<[(Box<[Edge]>, Box<[Edge]>)]>,
+    warps: Box<[Box<[Edge]>]>,
+}
 
-    // map &str to usize
-    let start_i = verts_name_arr.iter().position(|&s| s == start).unwrap();
-    let end_i = verts_name_arr.len();
+trait Report {
+    type Res;
+    fn send(&mut self, res: Self::Res);
+}
 
-    // create stack buffer to build a path
-    let mut rt_buf = Vec::<Place>::new();
-    // create counter: Map<usize, Num> to determine whether a warp is activated
-    let mut active_warps_buf = vec![0; warps.len()];
+impl Searcher {
+    const START_I: usize = 0;
+    const END_I: usize = isize::MAX as usize + 1;
 
-    // if a complete path is found, it will be sent through the channel
-    let (sender, receiver) = crossbeam_channel::unbounded::<(usize, Vec<Place>)>();
-    active_warps_buf.extend(iter::repeat(0).take(warps.len()));
-
-    // single threaded algorithm, for locality
-    fn single_threaded_search_vert(
-        current_vert_i: usize,
-        unexplored: usize,
-        verts_arr: &[(&[(usize, usize, &[usize])], &[(usize, usize, &[usize])])],
-        warps_arr: &[&[(usize, usize, &[usize])]],
-        start_i: usize,
-        end_i: usize,
-        rt_buf: &mut Vec<Place>,
-        total_dis: usize,
-        active_warps_buf: &mut Vec<usize>,
-        sender: &Sender<(usize, Vec<Place>)>,
+    fn search_place(
+        &self,
+        current_vertex: usize,
+        unexpl: usize,
+        excur: usize,
+        st: &mut SearchState,
+        collector: &mut impl Report<Res = SearchResultEntry>,
     ) {
-        //if exploration complete, go to the end
-        if unexplored == 0 {
-            let (to_v, to_w) = &verts_arr[current_vert_i];
-            if let Some(&(dst, d, _)) = to_v.last() {
-                if end_i == dst {
-                    rt_buf.push(Place::Vertex(dst));
-                    let len = total_dis + d;
-                    sender.send((len, rt_buf.clone())).unwrap();
-                    rt_buf.pop();
-                }
+        let (to_v, to_w) = &self.vertexes[current_vertex];
+        if unexpl == 0 {
+            // go to end
+            let mut any_ended = false;
+            if let Some(&(e @ Self::END_I, d, _)) = to_v.last() {
+                let mut r = st.route.clone();
+                r.push(Place::Vertex(e));
+                let excur = excur + d;
+                collector.send((excur, r));
+                any_ended = true;
             }
-            if let Some(&(dstw, dw, _)) = to_w.first() {
-                rt_buf.push(Place::Warp(dstw));
-                for wi in 0..warps_arr.len() {
-                    if active_warps_buf[wi] > 0 && wi != dstw {
-                        let &(wdstv, wdv, _) = warps_arr[wi].last().unwrap();
-                        if end_i == wdstv {
-                            rt_buf.push(Place::Warp(wi));
-                            rt_buf.push(Place::Vertex(wdstv));
-                            let len = total_dis + dw + 69 + wdv;
-                            sender.send((len, rt_buf.clone())).unwrap();
-                            rt_buf.pop();
-                            rt_buf.pop();
+            if let Some(&(dst, d, ref act)) = to_w.first().filter(|_| !any_ended) {
+                st.route.push(Place::Warp(dst));
+                for &aw in act.iter() {
+                    st.active_warps[aw] += 1;
+                }
+                let excur = excur + d + 69;
+                for w in 0..self.warps.len() {
+                    if st.active_warps[w] > 0 && w != dst {
+                        let w_to_v = &self.warps[w];
+                        st.route.push(Place::Warp(w));
+                        if let Some(&(e @ Self::END_I, d, _)) = w_to_v.last() {
+                            let mut r = st.route.clone();
+                            r.push(Place::Vertex(e));
+                            let excur = excur + d;
+                            collector.send((excur, r));
+                            any_ended = true;
                         }
+                        st.route.pop();
                     }
                 }
-                rt_buf.pop();
+                st.route.pop();
+                for &aw in act.iter() {
+                    st.active_warps[aw] -= 1;
+                }
+            }
+            if !any_ended {
+                let (s_to_v, s_to_w) = &self.vertexes[Self::START_I];
+                st.route.push(Place::Vertex(Self::START_I));
+                if let Some(&(e @ Self::END_I, d, _)) = s_to_v.last() {
+                    let mut r = st.route.clone();
+                    r.push(Place::Vertex(e));
+                    let excur = excur + d;
+                    collector.send((excur, r));
+                    any_ended = true;
+                }
+                if let Some(&(dst, d, ref act)) = s_to_w.first().filter(|_| !any_ended) {
+                    st.route.push(Place::Warp(dst));
+                    for &aw in act.iter() {
+                        st.active_warps[aw] += 1;
+                    }
+                    let excur = excur + d + 69;
+                    for w in 0..self.warps.len() {
+                        if st.active_warps[w] > 0 && w != dst {
+                            let w_to_v = &self.warps[w];
+                            st.route.push(Place::Warp(w));
+                            if let Some(&(e @ Self::END_I, d, _)) = w_to_v.last() {
+                                let mut r = st.route.clone();
+                                r.push(Place::Vertex(e));
+                                let excur = excur + d;
+                                collector.send((excur, r));
+                                // any_ended = true;
+                            }
+                            st.route.pop();
+                        }
+                    }
+                    st.route.pop();
+                    for &aw in act.iter() {
+                        st.active_warps[aw] -= 1;
+                    }
+                }
+                st.route.pop();
             }
         } else {
-            //go to chapter
-            let &(to_v, to_w) = &verts_arr[current_vert_i];
-            for &(dst, d, act) in to_v {
-                if !rt_buf.contains(&Place::Vertex(dst)) && end_i != dst {
-                    rt_buf.push(Place::Vertex(dst));
-                    for &a in act {
-                        active_warps_buf[a] += 1;
+            let mut any_searched = false;
+            // go to next
+            for &(dst, d, ref act) in to_v.iter() {
+                if !st.route.contains(&Place::Vertex(dst)) && dst != Self::END_I {
+                    st.route.push(Place::Vertex(dst));
+                    for &aw in act.iter() {
+                        st.active_warps[aw] += 1;
                     }
-                    single_threaded_search_vert(
-                        dst,
-                        unexplored - 1,
-                        verts_arr,
-                        warps_arr,
-                        start_i,
-                        end_i,
-                        rt_buf,
-                        total_dis + d,
-                        active_warps_buf,
-                        &sender,
-                    );
-                    for &a in act {
-                        active_warps_buf[a] -= 1;
+                    let unexpl = unexpl - 1;
+                    let excur = excur + d;
+                    any_searched = true;
+                    self.search_place(dst, unexpl, excur, st, collector);
+                    st.route.pop();
+                    for &aw in act.iter() {
+                        st.active_warps[aw] -= 1;
                     }
-                    rt_buf.pop();
                 }
             }
-            // go to warp
-            if let Some(&(dstw, dw, act)) = to_w.iter().max_by_key(|(.., act)| act.len()) {
-                // activate warps
-                for &a in act {
-                    active_warps_buf[a] += 1;
+            // go to next warp
+            if let Some(&(dst, d, ref act)) = to_w.first().filter(|_| !any_searched) {
+                st.route.push(Place::Warp(dst));
+                for &aw in act.iter() {
+                    st.active_warps[aw] += 1;
                 }
-                rt_buf.push(Place::Warp(dstw));
-                for wi in 0..warps_arr.len() {
-                    // traverse active warps out, except for that has been just entered
-                    if active_warps_buf[wi] > 0 && wi != dstw {
-                        rt_buf.push(Place::Warp(wi));
-                        let &w_to_v = &warps_arr[wi];
-                        for &(wdstv, wdv, act) in w_to_v {
-                            if !rt_buf.contains(&Place::Vertex(wdstv)) && end_i != wdstv {
-                                rt_buf.push(Place::Vertex(wdstv));
-                                for &a in act {
-                                    active_warps_buf[a] += 1;
+                let excur = excur + d + 69;
+                for w in 0..self.warps.len() {
+                    if st.active_warps[w] > 0 && w != dst {
+                        let w_to_v = &self.warps[w];
+                        st.route.push(Place::Warp(w));
+                        for &(dst, d, ref act) in w_to_v.iter() {
+                            if dst != Self::END_I
+                                && to_v.binary_search_by_key(&dst, |&(dst1, ..)| dst1).is_err()
+                                && !st.route.contains(&Place::Vertex(dst))
+                            {
+                                st.route.push(Place::Vertex(dst));
+                                for &aw in act.iter() {
+                                    st.active_warps[aw] += 1;
                                 }
-                                single_threaded_search_vert(
-                                    wdstv,
-                                    unexplored - 1,
-                                    verts_arr,
-                                    warps_arr,
-                                    start_i,
-                                    end_i,
-                                    rt_buf,
-                                    total_dis + dw + 69 + wdv,
-                                    active_warps_buf,
-                                    &sender,
-                                );
-                                for &a in act {
-                                    active_warps_buf[a] -= 1;
+                                let unexpl = unexpl - 1;
+                                let excur = excur + d;
+                                any_searched = true;
+                                self.search_place(dst, unexpl, excur, st, collector);
+                                st.route.pop();
+                                for &aw in act.iter() {
+                                    st.active_warps[aw] -= 1;
                                 }
-                                rt_buf.pop();
                             }
                         }
-                        rt_buf.pop();
+                        st.route.pop();
                     }
                 }
-                rt_buf.pop();
-                for &a in act {
-                    active_warps_buf[a] -= 1;
+                st.route.pop();
+                for &aw in act.iter() {
+                    st.active_warps[aw] -= 1;
                 }
             }
             // go to start
-            let &(s_to_v, _) = &verts_arr[start_i];
-            rt_buf.push(Place::Vertex(start_i));
-            for &(dst, d, act) in s_to_v {
-                if !rt_buf.contains(&Place::Vertex(dst))
-                    && to_v.binary_search_by_key(&dst, |&(d, ..)| d).is_err()
-                {
-                    rt_buf.push(Place::Vertex(dst));
-                    for &a in act {
-                        active_warps_buf[a] += 1;
-                    }
-                    single_threaded_search_vert(
-                        dst,
-                        unexplored - 1,
-                        verts_arr,
-                        warps_arr,
-                        start_i,
-                        end_i,
-                        rt_buf,
-                        total_dis + d + 69,
-                        active_warps_buf,
-                        &sender,
-                    );
-                    for &a in act {
-                        active_warps_buf[a] -= 1;
-                    }
-                    rt_buf.pop();
-                }
-            }
-            rt_buf.pop();
-        }
-    }
-
-    // number for the determination of forking
-    let workers_num = rayon::current_num_threads();
-    const WORKER_FACTOR: usize = 32;
-
-    fn search_vert(
-        current_vert_i: usize,
-        unexplored: usize,
-        verts_arr: &'static [(&[(usize, usize, &[usize])], &[(usize, usize, &[usize])])],
-        warps_arr: &'static [&[(usize, usize, &[usize])]],
-        start_i: usize,
-        end_i: usize,
-        rt_buf: &mut Vec<Place>,
-        total_dis: usize,
-        active_warps_buf: &mut Vec<usize>,
-        sender: Sender<(usize, Vec<Place>)>,
-        estimated_extent: usize,
-        workers_num: usize,
-    ) {
-        //if exploration complete, go to the end
-        if unexplored == 0 {
-            let (to_v, to_w) = &verts_arr[current_vert_i];
-            if let Some(&(dst, d, _)) = to_v.last() {
-                if end_i == dst {
-                    rt_buf.push(Place::Vertex(dst));
-                    let len = total_dis + d;
-                    sender.send((len, rt_buf.clone())).unwrap();
-                    rt_buf.pop();
-                }
-            }
-            if let Some(&(dstw, dw, _)) = to_w.first() {
-                for wi in 0..warps_arr.len() {
-                    if active_warps_buf[wi] > 0 && wi != dstw {
-                        let &(wdstv, wdv, _) = warps_arr[wi].last().unwrap();
-                        if end_i == wdstv {
-                            rt_buf.push(Place::Warp(wi));
-                            rt_buf.push(Place::Vertex(wdstv));
-                            let len = total_dis + dw + 69 + wdv;
-                            sender.send((len, rt_buf.clone())).unwrap();
-                            rt_buf.pop();
-                            rt_buf.pop();
+            if !any_searched {
+                let (s_to_v, s_to_w) = &self.vertexes[Self::START_I];
+                st.route.push(Place::Vertex(Self::START_I));
+                let excur = excur + 69;
+                for &(dst, d, ref act) in s_to_v.iter() {
+                    if dst != Self::END_I
+                        && to_v.binary_search_by_key(&dst, |&(dst1, ..)| dst1).is_err()
+                        && !st.route.contains(&Place::Vertex(dst))
+                    {
+                        st.route.push(Place::Vertex(dst));
+                        for &aw in act.iter() {
+                            st.active_warps[aw] += 1;
+                        }
+                        let unexpl = unexpl - 1;
+                        let excur = excur + d;
+                        any_searched = true;
+                        self.search_place(dst, unexpl, excur, st, collector);
+                        st.route.pop();
+                        for &aw in act.iter() {
+                            st.active_warps[aw] -= 1;
                         }
                     }
                 }
+                if let Some(&(dst, d, ref act)) = s_to_w.first().filter(|_| !any_searched) {
+                    st.route.push(Place::Warp(dst));
+                    for &aw in act.iter() {
+                        st.active_warps[aw] += 1;
+                    }
+                    let excur = excur + d + 69;
+                    for w in 0..self.warps.len() {
+                        if st.active_warps[w] > 0 && w != dst {
+                            let w_to_v = &self.warps[w];
+                            st.route.push(Place::Warp(w));
+                            for &(dst, d, ref act) in w_to_v.iter() {
+                                if dst != Self::END_I
+                                    && to_v.binary_search_by_key(&dst, |&(dst1, ..)| dst1).is_err()
+                                    && !st.route.contains(&Place::Vertex(dst))
+                                {
+                                    st.route.push(Place::Vertex(dst));
+                                    for &aw in act.iter() {
+                                        st.active_warps[aw] += 1;
+                                    }
+                                    let unexpl = unexpl - 1;
+                                    let excur = excur + d;
+                                    self.search_place(dst, unexpl, excur, st, collector);
+                                    st.route.pop();
+                                    for &aw in act.iter() {
+                                        st.active_warps[aw] -= 1;
+                                    }
+                                }
+                            }
+                            st.route.pop();
+                        }
+                    }
+                    st.route.pop();
+                    for &aw in act.iter() {
+                        st.active_warps[aw] -= 1;
+                    }
+                }
+                st.route.pop();
             }
-        } else {
-            //go to chapter
-            let &(to_v, to_w) = &verts_arr[current_vert_i];
-            for &(dst, d, act) in to_v {
-                if !rt_buf.contains(&Place::Vertex(dst)) && end_i != dst {
-                    rt_buf.push(Place::Vertex(dst));
-                    for &a in act {
-                        active_warps_buf[a] += 1;
-                    }
-                    let estimated_extent = to_v.len() * estimated_extent;
-                    // determine if tree extent is large enough to stop forking
-                    if estimated_extent < workers_num * WORKER_FACTOR {
-                        let mut rt_buf = rt_buf.clone();
-                        let mut active_warps_buf = active_warps_buf.clone();
-                        let collector = sender.clone();
-                        rayon::spawn(move || {
-                            search_vert(
-                                dst,
-                                unexplored - 1,
-                                verts_arr,
-                                warps_arr,
-                                start_i,
-                                end_i,
-                                &mut rt_buf,
-                                total_dis + d,
-                                &mut active_warps_buf,
-                                collector,
-                                estimated_extent,
-                                workers_num,
-                            );
-                        });
-                    } else {
-                        single_threaded_search_vert(
-                            dst,
-                            unexplored - 1,
-                            verts_arr,
-                            warps_arr,
-                            start_i,
-                            end_i,
-                            rt_buf,
-                            total_dis + d,
-                            active_warps_buf,
-                            &sender,
-                        );
-                    }
-                    for &a in act {
-                        active_warps_buf[a] -= 1;
-                    }
-                    rt_buf.pop();
+        }
+    }
+
+    fn search(&self, collector: &mut impl Report<Res = SearchResultEntry>) {
+        let mut st = SearchState::new(self.warps.len());
+        let st = &mut st;
+        let excur = 0;
+        let unexpl = self.vertexes.len() - 1;
+        // go to start
+        let mut any_searched = false;
+        let (s_to_v, s_to_w) = &self.vertexes[Self::START_I];
+        st.route.push(Place::Vertex(Self::START_I));
+        for &(dst, d, ref act) in s_to_v.iter() {
+            if dst != Self::END_I && !st.route.contains(&Place::Vertex(dst)) {
+                st.route.push(Place::Vertex(dst));
+                for &aw in act.iter() {
+                    st.active_warps[aw] += 1;
+                }
+                let unexpl = unexpl - 1;
+                let excur = excur + d;
+                any_searched = true;
+                self.search_place(dst, unexpl, excur, st, collector);
+                st.route.pop();
+                for &aw in act.iter() {
+                    st.active_warps[aw] -= 1;
                 }
             }
-            // go to warp
-            if let Some(&(dstw, dw, act)) = to_w.iter().max_by_key(|(.., act)| act.len()) {
-                // activate warps
-                for &a in act {
-                    active_warps_buf[a] += 1;
-                }
-                rt_buf.push(Place::Warp(dstw));
-                for wi in 0..warps_arr.len() {
-                    // traverse active warps out, except for that has been just entered
-                    if active_warps_buf[wi] > 0 && wi != dstw {
-                        let &w_to_v = &warps_arr[wi];
-                        rt_buf.push(Place::Warp(wi));
-                        for &(wdstv, wdv, act) in w_to_v {
-                            if !rt_buf.contains(&Place::Vertex(wdstv)) && end_i != wdstv {
-                                rt_buf.push(Place::Vertex(wdstv));
-                                for &a in act {
-                                    active_warps_buf[a] += 1;
-                                }
-                                let estimated_extent = w_to_v.len() * estimated_extent;
-                                if estimated_extent < workers_num * WORKER_FACTOR {
-                                    let mut rt_buf = rt_buf.clone();
-                                    let mut active_warps_buf = active_warps_buf.clone();
-                                    let collector = sender.clone();
-                                    rayon::spawn(move || {
-                                        search_vert(
-                                            wdstv,
-                                            unexplored - 1,
-                                            verts_arr,
-                                            warps_arr,
-                                            start_i,
-                                            end_i,
-                                            &mut rt_buf,
-                                            total_dis + dw + 69 + wdv,
-                                            &mut active_warps_buf,
-                                            collector,
-                                            estimated_extent,
-                                            workers_num,
-                                        );
-                                    })
-                                } else {
-                                    single_threaded_search_vert(
-                                        wdstv,
-                                        unexplored - 1,
-                                        verts_arr,
-                                        warps_arr,
-                                        start_i,
-                                        end_i,
-                                        rt_buf,
-                                        total_dis + dw + 69 + wdv,
-                                        active_warps_buf,
-                                        &sender,
-                                    );
-                                }
-                                for &a in act {
-                                    active_warps_buf[a] -= 1;
-                                }
-                                rt_buf.pop();
+        }
+        if let Some(&(dst, d, ref act)) = s_to_w.first().filter(|_| !any_searched) {
+            st.route.push(Place::Warp(dst));
+            for &aw in act.iter() {
+                st.active_warps[aw] += 1;
+            }
+            let excur = excur + d + 69;
+            for w in 0..self.warps.len() {
+                if st.active_warps[w] > 0 && w != dst {
+                    let w_to_v = &self.warps[w];
+                    for &(dst, d, ref act) in w_to_v.iter() {
+                        if dst != Self::END_I && !st.route.contains(&Place::Vertex(dst)) {
+                            st.route.push(Place::Vertex(dst));
+                            for &aw in act.iter() {
+                                st.active_warps[aw] += 1;
+                            }
+                            let unexpl = unexpl - 1;
+                            let excur = excur + d;
+                            any_searched = true;
+                            self.search_place(dst, unexpl, excur, st, collector);
+                            st.route.pop();
+                            for &aw in act.iter() {
+                                st.active_warps[aw] -= 1;
                             }
                         }
-                        rt_buf.pop();
                     }
-                }
-                rt_buf.pop();
-                for &a in act {
-                    active_warps_buf[a] -= 1;
                 }
             }
-            // go to start
-            let &(s_to_v, _) = &verts_arr[start_i];
-            rt_buf.push(Place::Vertex(start_i));
-            for &(dst, d, act) in s_to_v {
-                if !rt_buf.contains(&Place::Vertex(dst))
-                    && to_v.binary_search_by_key(&dst, |&(d, ..)| d).is_err()
-                {
-                    rt_buf.push(Place::Vertex(dst));
-                    for &a in act {
-                        active_warps_buf[a] += 1;
-                    }
-                    let estimated_extent = s_to_v.len() * estimated_extent;
-                    if estimated_extent < workers_num * WORKER_FACTOR {
-                        let mut rt_buf = rt_buf.clone();
-                        let mut active_warps_buf = active_warps_buf.clone();
-                        let collector = sender.clone();
-                        rayon::spawn(move || {
-                            search_vert(
-                                dst,
-                                unexplored - 1,
-                                verts_arr,
-                                warps_arr,
-                                start_i,
-                                end_i,
-                                &mut rt_buf,
-                                total_dis + d + 69,
-                                &mut active_warps_buf,
-                                collector,
-                                estimated_extent,
-                                workers_num,
-                            );
-                        });
-                    } else {
-                        single_threaded_search_vert(
-                            dst,
-                            unexplored - 1,
-                            verts_arr,
-                            warps_arr,
-                            start_i,
-                            end_i,
-                            rt_buf,
-                            total_dis + d + 69,
-                            active_warps_buf,
-                            &sender,
-                        );
-                    }
-                    for &a in act {
-                        active_warps_buf[a] -= 1;
-                    }
-                    rt_buf.pop();
-                }
+            st.route.pop();
+            for &aw in act.iter() {
+                st.active_warps[aw] -= 1;
             }
-            rt_buf.pop();
+        }
+        st.route.pop();
+    }
+}
+
+#[derive(Debug)]
+struct SearcherBuilder<'a, 's: 'a> {
+    splited: &'a VertexWarpSplit<'s>,
+    thread_num: Option<usize>,
+}
+
+impl<'a, 's: 'a> SearcherBuilder<'a, 's> {
+    fn new(splited: &'a VertexWarpSplit<'s>) -> Self {
+        Self {
+            splited,
+            thread_num: Default::default(),
         }
     }
 
-    rayon::spawn(move || {
-        rt_buf.push(Place::Vertex(start_i));
-        search_vert(
-            start_i,
-            verts_arr.len() - 1,
-            verts_arr,
-            warps_arr,
-            start_i,
-            end_i,
-            &mut rt_buf,
-            0,
-            &mut active_warps_buf,
-            sender,
-            1,
-            workers_num,
-        );
-    });
+    fn thread_num(self, n: usize) -> Self {
+        Self {
+            thread_num: Some(n),
+            ..self
+        }
+    }
 
-    receiver.into_iter().map(move |(total_dis, p)| {
-        let p = p
-            .into_iter()
-            .map(|i| match i {
-                Place::Vertex(v) => {
-                    if v == end_i {
-                        end
-                    } else {
-                        verts_name_arr[v]
-                    }
-                }
-                Place::Warp(w) => warps_name_arr[w],
+    fn build(self) -> (PlaceName<'s>, Searcher) {
+        let place_name = PlaceName::new(self.splited);
+
+        let vertexes = place_name
+            .inters
+            .iter()
+            .map(|src| {
+                let to_v = self.splited.v()[src]
+                    .0
+                    .iter()
+                    .map(|(dst, (d, act))| {
+                        let dst = place_name
+                            .inters
+                            .binary_search(dst)
+                            .unwrap_or(Searcher::END_I);
+                        let act = act
+                            .iter()
+                            .map(|w| place_name.warps.binary_search(w).unwrap())
+                            .collect::<Box<_>>();
+                        (dst, *d, act)
+                    })
+                    .collect();
+
+                let to_w = self.splited.v()[src]
+                    .1
+                    .iter()
+                    .map(|(dst, (d, act))| {
+                        let dst = place_name.warps.binary_search(dst).unwrap();
+                        let act = act
+                            .iter()
+                            .map(|w| place_name.warps.binary_search(w).unwrap())
+                            .collect::<Box<_>>();
+                        (dst, *d, act)
+                    })
+                    .collect();
+                (to_v, to_w)
             })
             .collect();
-        (total_dis, p)
-    })
+
+        let warps = place_name
+            .warps
+            .iter()
+            .map(|src| {
+                self.splited
+                    .w()
+                    .get(src)
+                    .iter()
+                    .flat_map(|i| i.into_iter())
+                    .map(|(dst, (d, act))| {
+                        let dst = place_name
+                            .inters
+                            .binary_search(dst)
+                            .unwrap_or(Searcher::END_I);
+                        let act = act
+                            .iter()
+                            .map(|w| place_name.warps.binary_search(w).unwrap())
+                            .collect();
+                        (dst, *d, act)
+                    })
+                    .collect()
+            })
+            .collect();
+        let s = Searcher {
+            vertexes,
+            warps,
+            //_phantom: PhantomData,
+        };
+
+        (place_name, s)
+    }
+}
+
+#[derive(Debug)]
+struct VertexWarpSplit<'a> {
+    vertexes: BiGraph<'a>,
+    warps: Graph<'a>,
+}
+
+impl<'a> VertexWarpSplit<'a> {
+    fn from_graph(mut graph: Graph<'a>) -> Self {
+        let warps = graph.split_off("A");
+        let (warp_to_vertex, _) = warps
+            .into_iter()
+            .map(|(wsrc, mut dsts)| {
+                let (wdsts, vdsts) = (dsts.split_off("A"), dsts);
+                ((wsrc, vdsts), (wsrc, wdsts))
+            })
+            .unzip::<_, _, Graph, Graph>();
+        let vertexes = graph
+            .into_iter()
+            .map(|(src, mut dsts)| {
+                let (wdsts, vdsts) = (dsts.split_off("A"), dsts);
+                (src, (vdsts, wdsts))
+            })
+            .collect();
+        Self {
+            vertexes,
+            warps: warp_to_vertex,
+        }
+    }
+
+    fn v(&self) -> &BiGraph<'a> {
+        &self.vertexes
+    }
+
+    fn w(&self) -> &Graph<'a> {
+        &self.warps
+    }
+}
+
+#[derive(Debug)]
+struct PlaceName<'a> {
+    inters: Vec<&'a str>,
+    end: &'a str,
+    warps: Vec<&'a str>,
+}
+
+impl<'a> PlaceName<'a> {
+    fn new(vertex_and_warp: &VertexWarpSplit<'a>) -> Self {
+        let inters = vertex_and_warp
+            .v()
+            .keys()
+            .map(|&src| src)
+            .collect::<Vec<_>>();
+        let end = vertex_and_warp
+            .v()
+            .values()
+            .map(|(v, _)| v)
+            .chain(vertex_and_warp.w().values())
+            .flat_map(IntoIterator::into_iter)
+            .map(|(&vdst, _)| vdst)
+            .filter(|s| !inters.contains(s))
+            .unique()
+            .exactly_one()
+            .expect("Cannot determine destination. The lobby might be incomplete.");
+        let warps = vertex_and_warp
+            .v()
+            .values()
+            .flat_map(|(_, w)| w.into_iter())
+            .map(|(dst, _)| dst)
+            .chain(vertex_and_warp.w().keys())
+            .map(|&wsrc| wsrc)
+            .unique()
+            .sorted()
+            .collect::<Vec<_>>();
+        Self { end, inters, warps }
+    }
+}
+
+impl PlaceName<'_> {
+    // fn start(&self) -> &str {
+    //     self.inters[Searcher::START_I]
+    // }
+
+    fn name(&self, place: Place) -> &str {
+        match place {
+            Place::Vertex(v) => self.inters.get(v).unwrap_or(&self.end),
+            Place::Warp(w) => self.warps[w],
+        }
+    }
 }
 
 fn main() {
     let cli = Cli::parse();
-    let mut buf = Vec::new();
-    io::stdin().read_to_end(&mut buf).unwrap();
-    let data = String::from_utf8(buf).unwrap();
-    let mut graph: Graph = serde_json::from_str(&data).unwrap();
-    let warps = graph.split_off("A");
-    let verts: WarpingGraph = graph
-        .into_iter()
-        .map(|(k, mut v)| {
-            let vm1 = v.split_off("A");
-            (k, (v, vm1))
+    let max_collect = cli
+        .collect
+        .inspect(|&v| {
+            if v > 512 {
+                eprintln!("Warning: Collecting amount will be clamped to 512")
+            }
         })
-        .collect();
-    let (min, max) = verts
-        .iter()
-        .flat_map(|(&k, (vt, _))| iter::once(k).chain(vt.keys().map(Deref::deref)))
-        .chain(warps.iter().flat_map(|(_, v)| v.keys().map(Deref::deref)))
-        .filter_map(|s| usize::from_str(s).ok().map(|index| (index, s)))
-        .minmax()
-        .into_option()
-        .map(|((_, min), (_, max))| (min, max))
-        .unwrap();
+        .unwrap_or(3)
+        .clamp(1, 512);
 
-    let collect_count = cli.collect.unwrap_or(1);
-    let mut res_buf: BinaryHeap<(usize, Vec<&str>)> = BinaryHeap::new();
-    let mut rt_count = 0;
+    let mut buf = String::new();
+    let mut graph: Option<Graph> = None;
+    for line_input in io::stdin().lines() {
+        buf.push_str(&line_input.expect("Receive error reading input"));
+        graph = serde_json::from_str(&buf).ok();
+    }
+    let graph = graph.expect("Fail to deserialize");
 
-    for e in search_it(&verts, &warps, min, max) {
-        rt_count += 1;
-        res_buf.push(e);
-        while res_buf.len() > collect_count {
-            res_buf.pop();
+    let splited: VertexWarpSplit = VertexWarpSplit::from_graph(graph);
+    let (pn, s) = SearcherBuilder::new(&splited).build();
+    struct Listener {
+        count: usize,
+        max_collect: usize,
+        res_buf: BinaryHeap<SearchResultEntry>,
+    }
+    impl Report for Listener {
+        type Res = SearchResultEntry;
+
+        fn send(&mut self, res: Self::Res) {
+            self.res_buf.push(res);
+            self.count += 1;
+            while self.res_buf.len() > self.max_collect {
+                self.res_buf.pop();
+            }
         }
     }
-
-    println!("Found {rt_count} routes.");
-    for (i, (dis, rt)) in res_buf.into_sorted_vec().into_iter().enumerate() {
-        println!("({}) [{}] {}", i + 1, dis, rt.join("-"));
+    let mut listener = Listener {
+        count: 0,
+        max_collect,
+        res_buf: BinaryHeap::new(),
+    };
+    s.search(&mut listener);
+    let res = listener.res_buf.into_sorted_vec();
+    println!("Found {} routes", listener.count);
+    for (i, (l, v)) in res.into_iter().enumerate() {
+        let pth = v.iter().map(|&pl| pn.name(pl)).join("-");
+        println!("({})\t[{l}]\t{pth}", i + 1);
     }
+}
+
+#[derive(Parser)]
+#[command(version)]
+struct Cli {
+    collect: Option<usize>,
+    #[arg(id = "threads", short, long)]
+    threads: Option<Option<usize>>,
 }

@@ -40,7 +40,7 @@ fn main() {
         .collect();
     let warp_coords: BTreeMap<_, _> = edges
         .iter()
-        .filter(|((src, _), _)| src.chars().all(|c| c.is_ascii_alphabetic()))
+        .filter(|((src, _), _)| !src.is_empty() && src.chars().all(|c| c.is_ascii_alphabetic()))
         .map(|((src, dst), content)| {
             let coord = content
                 .lines()
@@ -57,14 +57,6 @@ fn main() {
         .collect();
     let graph: HashMap<_, HashMap<_, _>> = edges
         .iter()
-        .filter(|((a, b), _)| {
-            let p =
-                a.chars().any(|c| !c.is_ascii_digit()) && b.chars().any(|c| !c.is_ascii_digit());
-            if p {
-                eprintln!("Warning: {a}-{b} is ignored");
-            }
-            !p
-        })
         .map(|((src, dst), content)| {
             let time: usize = content
                 .lines()

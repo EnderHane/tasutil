@@ -8,6 +8,7 @@ cgmath = "0.18.0"
 clap = { version = "4.5.7", features = ["derive"] }
 counter = "0.5.7"
 crossbeam-channel = "0.5.13"
+derive_more = "0.99.18"
 itertools = "0.13.0"
 ordered-float = "4.2.0"
 rayon = "1.10.0"
