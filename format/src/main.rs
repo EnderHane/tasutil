@@ -27,9 +27,9 @@ fn main() {
         })
         .for_each(|e| {
             File::open(e.path())
-                .expect(&format!("Cannot open file {:?}", e.path()))
+                .expect(&format!("Cannot open file {}", e.path().display()))
                 .read_to_string(&mut buf)
-                .expect(&format!("Cannot read file {:?}", e.path()));
+                .expect(&format!("Cannot read file {}", e.path().display()));
             let [bp, _] = criticize_format_issue(e.path(), &buf);
             mark_bp |= bp;
             buf.clear();
@@ -45,7 +45,7 @@ fn criticize_format_issue(filepath: &Path, content: &str) -> [bool; 2] {
     let mut mark_bp = false;
     for (ln, content) in format::find_breakpoints(content) {
         if !mark_bp {
-            println!("breakpoints found in {filepath:?}");
+            println!("breakpoints found in {}", filepath.display());
             mark_bp = true;
         }
         println!("line\t{ln}\t{content}");
@@ -53,10 +53,10 @@ fn criticize_format_issue(filepath: &Path, content: &str) -> [bool; 2] {
     let mut mark_sl = true;
     let starts: Vec<_> = format::find_start_labels(content).collect();
     match starts.len() {
-        0 => println!("start label (#Start) not found in {filepath:?}"),
+        0 => println!("start label (#Start) not found in {}", filepath.display()),
         1 => mark_sl = false,
         2.. => {
-            println!("multiple start labels found in {filepath:?}");
+            println!("multiple start labels found in {}", filepath.display());
             for (ln, content) in starts {
                 println!("line\t{ln}\t{content}");
             }
